@@ -43,21 +43,23 @@ if ! grep -Eq '^CONFIG_CFG80211=(y|m)$' "$STAGE/config.stock"; then
   [ "${ALLOW_CFG80211_ABI_RISK:-0}" = 1 ] || exit 2
 fi
 
-# 3. Add the wireless stack, as modules only.
-#    Debug info is dropped to speed up the build; it does not affect module ABI.
-(
-  cd "$KSRC"
-  ./scripts/config \
-    --enable WIRELESS --enable WLAN --enable WLAN_VENDOR_MEDIATEK \
-    --module CFG80211 --disable CFG80211_WEXT \
-    --module MAC80211 \
-    --module MT76x0U \
-    --disable DEBUG_INFO --enable DEBUG_INFO_NONE --disable DEBUG_INFO_BTF
-)
+# 3. Add the wireless stack as modules, without touching anything the
+#    stock config already enables (built-in or module).
+enable_if_missing() {   # $1 = option name, $2 = --enable or --module
+  if ! grep -Eq "^CONFIG_$1=(y|m)$" "$KSRC/.config"; then
+    (cd "$KSRC" && ./scripts/config "$2" "$1")
+  fi
+}
+enable_if_missing WIRELESS             --enable
+enable_if_missing WLAN                 --enable
+enable_if_missing WLAN_VENDOR_MEDIATEK --enable
+enable_if_missing CFG80211             --module
+enable_if_missing MAC80211             --module
+enable_if_missing MT76x0U              --module
+
 "${MAKE[@]}" olddefconfig
 grep -q '^CONFIG_MT76x0U=m$' "$KSRC/.config" \
   || { echo "ERROR: MT76x0U not enabled after olddefconfig (missing dependency?)" >&2; exit 1; }
-
 # 4. Gate: apart from wireless/debug options, no built-in (=y) option may change,
 #    otherwise the kernel we build against differs from the one users run.
 builtin_opts() { grep -E '^CONFIG_[A-Za-z0-9_]+=y$' "$1" | sort; }
