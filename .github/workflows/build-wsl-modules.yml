@@ -1,0 +1,108 @@
+name: Build MT7610U modules for WSL kernels
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # every 6 hours
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "WSL kernel version to (re)build, e.g. 6.6.87.2. Leave empty to auto-detect new releases."
+        required: false
+        default: ""
+
+permissions:
+  contents: write        # create releases
+  id-token: write        # build provenance attestation
+  attestations: write
+
+concurrency:
+  group: wsl-mt7610u-build
+  cancel-in-progress: false
+
+env:
+  MIN_SERIES: "6.6"      # ignore kernel series older than this
+  MAX_NEW_PER_RUN: "4"   # cap the matrix so the first run doesn't build every historical tag
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.find.outputs.versions }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            v="${INPUT_VERSION#linux-msft-wsl-}"
+            echo "versions=$(jq -cn --arg v "$v" '[$v]')" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Every upstream WSL kernel version at or above MIN_SERIES
+          gh api --paginate repos/microsoft/WSL2-Linux-Kernel/tags --jq '.[].name' \
+            | sed -n 's/^linux-msft-wsl-\([0-9][0-9.]*\)$/\1/p' \
+            | while read -r v; do
+                lowest=$(printf '%s\n%s\n' "$MIN_SERIES" "$v" | sort -V | head -n1)
+                [ "$lowest" = "$MIN_SERIES" ] && echo "$v"
+              done | sort -u > upstream.txt
+
+          # Versions already published as releases in this repo
+          gh release list -R "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName' \
+            | sed -n 's/^wsl-//p' | sort -u > built.txt
+
+          comm -23 upstream.txt built.txt | sort -V | tail -n "$MAX_NEW_PER_RUN" > todo.txt
+          echo "To build:"; cat todo.txt
+          echo "versions=$(jq -R -s -c 'split("\n") | map(select(length > 0))' todo.txt)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: discover
+    if: needs.discover.outputs.versions != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        version: ${{ fromJson(needs.discover.outputs.versions) }}
+    env:
+      VERSION: ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential flex bison bc libelf-dev libssl-dev dwarves \
+            python3 kmod cpio rsync zstd xz-utils
+
+      - name: Fetch WSL kernel source
+        run: |
+          git clone --depth 1 --branch "linux-msft-wsl-${VERSION}" \
+            https://github.com/microsoft/WSL2-Linux-Kernel.git kernel
+
+      - name: Build modules
+        run: ./scripts/build.sh kernel "$VERSION" out
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/*.tar.gz
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="wsl-${VERSION}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" out/*.tar.gz out/*.sha256 --clobber
+          else
+            gh release create "$tag" out/*.tar.gz out/*.sha256 \
+              --title "MT7610U modules for WSL kernel ${VERSION}" \
+              --notes "Built from microsoft/WSL2-Linux-Kernel tag linux-msft-wsl-${VERSION} (commit in manifest.json)."
+          fi
