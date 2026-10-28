@@ -58,8 +58,19 @@ enable_if_missing MAC80211             --module
 enable_if_missing MT76x0U              --module
 
 "${MAKE[@]}" olddefconfig
-grep -q '^CONFIG_MT76x0U=m$' "$KSRC/.config" \
-  || { echo "ERROR: MT76x0U not enabled after olddefconfig (missing dependency?)" >&2; exit 1; }
+if ! grep -q '^CONFIG_MT76x0U=m$' "$KSRC/.config"; then
+  echo "ERROR: MT76x0U not enabled after olddefconfig. Dependency chain (stock -> after):" >&2
+  for o in NETDEVICES WIRELESS WLAN WLAN_VENDOR_MEDIATEK CFG80211 MAC80211 \
+           USB_SUPPORT USB MT76_CORE MT76_USB MT76x0U; do
+    s=$(grep -E "^(# )?CONFIG_${o}[= ]" "$STAGE/config.stock" || echo "CONFIG_${o} (absent)")
+    a=$(grep -E "^(# )?CONFIG_${o}[= ]" "$KSRC/.config"       || echo "CONFIG_${o} (absent)")
+    printf '  %-45s -> %s\n' "$s" "$a" >&2
+  done
+  echo "MT76x0U Kconfig entry in this kernel:" >&2
+  grep -rn -A6 '^config MT76x0U$' "$KSRC/drivers/net/wireless/mediatek/mt76/" >&2 \
+    || echo "  (not found: driver may have moved or been renamed)" >&2
+  exit 1
+fi
 # 4. Gate: apart from wireless/debug options, no built-in (=y) option may change,
 #    otherwise the kernel we build against differs from the one users run.
 builtin_opts() { grep -E '^CONFIG_[A-Za-z0-9_]+=y$' "$1" | sort; }
