@@ -106,3 +106,29 @@ jobs:
               --title "MT7610U modules for WSL kernel ${VERSION}" \
               --notes "Built from microsoft/WSL2-Linux-Kernel tag linux-msft-wsl-${VERSION} (commit in manifest.json)."
           fi
+
+  index:
+    needs: [discover, build]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update supported-kernels.txt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release list --limit 1000 --json tagName --jq '.[].tagName' \
+            | sed -n 's/^wsl-\(.*\)$/\1-microsoft-standard-WSL2/p' \
+            | sort -V > supported-kernels.txt
+
+          git add supported-kernels.txt
+          if git diff --cached --quiet; then
+            echo "Kernel list unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update supported kernel list"
+          git push
