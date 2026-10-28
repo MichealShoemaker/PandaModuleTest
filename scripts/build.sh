@@ -47,7 +47,7 @@ fi
 #    stock config already enables (built-in or module).
 enable_if_missing() {   # $1 = option name, $2 = --enable or --module
   if ! grep -Eq "^CONFIG_$1=(y|m)$" "$KSRC/.config"; then
-    (cd "$KSRC" && ./scripts/config "$2" "$1")
+    (cd "$KSRC" && ./scripts/config --keep-case "$2" "$1")
   fi
 }
 enable_if_missing WIRELESS             --enable
