@@ -47,7 +47,7 @@ jobs:
             | sed -n 's/^linux-msft-wsl-\([0-9][0-9.]*\)$/\1/p' \
             | while read -r v; do
                 lowest=$(printf '%s\n%s\n' "$MIN_SERIES" "$v" | sort -V | head -n1)
-                [ "$lowest" = "$MIN_SERIES" ] && echo "$v"
+                 if [ "$lowest" = "$MIN_SERIES" ]; then echo "$v"; fi
               done | sort -u > upstream.txt
 
           # Versions already published as releases in this repo
